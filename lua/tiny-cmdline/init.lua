@@ -2,17 +2,6 @@ local M = {}
 
 M._initialized = false
 
----@class TinyCmdlineAdapters
-M.adapters = {
-  ---@type fun(): nil
-  blink = function()
-    local ok, menu = pcall(require, "blink.cmp.completion.windows.menu")
-    if ok and menu.win and menu.win:is_open() then
-      pcall(menu.update_position)
-    end
-  end,
-}
-
 --- Updates wildmenu popup position.
 ---
 --- This function is useful to update the wildmenu position after repositioning/moving tiny cmdline.
@@ -34,6 +23,20 @@ local function fix_pum()
   vim.api.nvim_feedkeys(vim.keycode(keys), "n", false)
 end
 
+--- Updates Blink popup position.
+local function fix_blink()
+  local ok, menu = pcall(require, "blink.cmp.completion.windows.menu")
+  if ok and menu.win and menu.win:is_open() then
+    pcall(menu.update_position)
+  end
+end
+
+---@class TinyCmdlineAdapters
+M.adapters = {
+  ---@type fun(): nil
+  blink = fix_blink,
+}
+
 ---@class TinyCmdlineWidthConfig
 ---@field value string|integer Width: "60%" = fraction of editor columns, integer = absolute columns
 ---@field min integer Minimum width in columns
@@ -53,6 +56,16 @@ end
 ---@field pos "left"|"center"|"right"
 ---@field formats TinyCmdlineTitleFormat[] Evaluated in order; first match wins
 
+---@class TinyCmdlineIntegrationConfig
+---@field blink TinyCmdlineBlinkIntegrationConfig
+---@field wildmenu TinyCmdlineWildmenuIntegrationConfig
+
+---@class TinyCmdlineBlinkIntegrationConfig
+---@field enabled boolean
+
+---@class TinyCmdlineWildmenuIntegrationConfig
+---@field enabled boolean
+
 ---@class TinyCmdlineConfig
 ---@field width TinyCmdlineWidthConfig
 ---@field position TinyCmdlinePositionConfig
@@ -61,6 +74,7 @@ end
 ---@field native_types string[] Types shown at the bottom instead of centered (e.g. "/", "?")
 ---@field title TinyCmdlineTitleConfig
 ---@field on_reposition fun()|nil Called after every reposition
+---@field integrations TinyCmdlineIntegrationConfig
 M.config = {
   width = {
     value = "60%",
@@ -90,7 +104,17 @@ M.config = {
       {                                         title = " CmdLine " },
     },
   },
+  -- on_reposition is an obsolete way to allow clients to integrate with TinyCmdline, but we keep
+  -- it to support backwards compatibility.
   on_reposition = nil,
+  integrations = {
+    blink = {
+      enabled = false,
+    },
+    wildmenu = {
+      enabled = true,
+    },
+  },
 }
 
 -- "60%" -> fraction of available; integer -> absolute
@@ -403,13 +427,24 @@ function M.setup(opts)
     end,
   })
 
-  vim.api.nvim_create_autocmd("User", {
-    group = group,
-    pattern = "TinyCmdlineMoved",
-    callback = function()
-      vim.schedule(fix_pum)
-    end,
-  })
+  if M.config.integrations.blink.enabled then
+    vim.api.nvim_create_autocmd("User", {
+      group = group,
+      pattern = "TinyCmdlineMoved",
+      callback = function()
+        fix_blink()
+      end,
+    })
+  end
+  if M.config.integrations.wildmenu.enabled then
+    vim.api.nvim_create_autocmd("User", {
+      group = group,
+      pattern = "TinyCmdlineMoved",
+      callback = function()
+        vim.schedule(fix_pum)
+      end,
+    })
+  end
 
   vim.schedule(wrap_and_reposition)
 end

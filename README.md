@@ -152,8 +152,17 @@ require("tiny-cmdline").setup({
         pos = "center",  -- "left" | "center" | "right"
     },
 
-    -- Optional callback invoked after every reposition
-    on_reposition = nil,
+    -- Built-in integrations with completion plugins
+    integrations = {
+        -- Keep the blink.cmp menu aligned with the cmdline window
+        blink = {
+            enabled = false,
+        },
+        -- Keep the wildmenu aligned with the cmdline window
+        wildmenu = {
+            enabled = true,
+        },
+    },
 })
 ```
 
@@ -193,7 +202,7 @@ vim.api.nvim_create_autocmd("User", {
 })
 ```
 
-tiny-cmdline itself listens to this event to move an open wildmenu popup (built-in completion) along with the window.
+tiny-cmdline itself listens to this event to move an open wildmenu popup (built-in completion) and, when `integrations.blink.enabled` is set, the blink.cmp menu along with the window.
 
 ## How It Works
 
@@ -209,18 +218,21 @@ tiny-cmdline is compatible with the most common completion plugins. The table be
 
 | Plugin | Menu repositions on open | Menu repositions on window resize | Extra config required |
 | --- | --- | --- | --- |
-| **blink.cmp** | :heavy_check_mark: with adapter | :heavy_check_mark: with adapter | :heavy_check_mark: see below |
+| **blink.cmp** | :heavy_check_mark: with integration | :heavy_check_mark: with integration | :heavy_check_mark: see below |
 | **nvim-cmp** | :heavy_check_mark: | :x: (not yet supported) | :x: |
 | **mini.cmdline** | :heavy_check_mark: | :x: (not yet supported) | :x: |
 | **Default (built-in)** | :heavy_check_mark: | :x: (not yet supported) | :x: |
 
 ### blink.cmp
 
-blink.cmp manages its own menu position independently. Use the built-in adapter so it follows the repositioned cmdline window:
+blink.cmp manages its own menu position independently. tiny-cmdline ships a built-in integration that moves an open blink.cmp menu whenever the cmdline window is moved or resized. It is disabled by default; enable it so the menu follows the repositioned cmdline window:
 
 ```lua
 require("tiny-cmdline").setup({
-    on_reposition = require("tiny-cmdline").adapters.blink,
+    integrations = {
+        blink = { enabled = true },
+        wildmenu = { enabled = false },
+    },
 })
 ```
 
