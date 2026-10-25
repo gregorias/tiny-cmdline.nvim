@@ -13,6 +13,7 @@ A Neovim plugin that repositions the cmdline as a centered floating window, powe
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Highlight Groups](#highlight-groups)
+- [Events](#events)
 - [How It Works](#how-it-works)
 - [Integrations](#integrations)
   - [blink.cmp](#blinkcmp)
@@ -172,6 +173,27 @@ Override them in your colorscheme or config:
 vim.api.nvim_set_hl(0, "TinyCmdlineBorder", { fg = "#your_color" })
 vim.api.nvim_set_hl(0, "TinyCmdlineNormal", { bg = "#your_color" })
 ```
+
+## Events
+
+| Event | Description |
+| --- | --- |
+| `User TinyCmdlineMoved` | Fired after the cmdline window is moved or resized (position or width changed). `vim.g.ui_cmdline_pos` is already updated when it fires. |
+
+The event is triggered from within ui2's cmdline handlers, so wrap anything that redraws or feeds keys in `vim.schedule()`:
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+    pattern = "TinyCmdlineMoved",
+    callback = function()
+        vim.schedule(function()
+            -- e.g. reposition your own completion menu using vim.g.ui_cmdline_pos
+        end)
+    end,
+})
+```
+
+tiny-cmdline itself listens to this event to move an open wildmenu popup (built-in completion) along with the window.
 
 ## How It Works
 
