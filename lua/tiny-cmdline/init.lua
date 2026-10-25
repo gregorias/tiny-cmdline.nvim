@@ -13,6 +13,27 @@ M.adapters = {
   end,
 }
 
+--- Updates wildmenu popup position.
+---
+--- This function is useful to update the wildmenu position after repositioning/moving tiny cmdline.
+--- PUM's position is calculated before cmdline_show gets called, so we need to fix it afterwards.
+---
+--- This method has the drawback of causing a flicker of PUM in its old place, but no other way
+--- exists.
+---
+--- This must be called in the main event loop, because it feeds keys.
+local function fix_pum()
+  local info = vim.fn.cmdcomplete_info()
+  -- only the popup menu is anchored to the cmd window; a horizontal wildmenu needn't move.
+  if vim.fn.wildmenumode() == 0 or info.pum_visible ~= 1 then
+    return
+  end
+  -- An open wildmenu only follows the window when redisplayed: reopen it when nothing is
+  -- selected, otherwise step the selection away and back so it stays selected
+  local keys = info.selected == -1 and "<C-e><Cmd>call wildtrigger()<CR>" or "<C-n><C-p>"
+  vim.api.nvim_feedkeys(vim.keycode(keys), "n", false)
+end
+
 ---@class TinyCmdlineWidthConfig
 ---@field value string|integer Width: "60%" = fraction of editor columns, integer = absolute columns
 ---@field min integer Minimum width in columns
@@ -248,13 +269,11 @@ local function reposition()
   local width, row, col, b = geometry(content_height)
   local title = compute_title()
   local borderless = M.config.border == "none" or M.config.border == nil
-  if
-    current.relative ~= "editor"
+  local moved = current.relative ~= "editor"
     or current.row ~= row
     or current.col ~= col
     or current.width ~= width
-    or applied_title ~= title
-  then
+  if moved or applied_title ~= title then
     local cfg = {
       relative = "editor",
       row = row,
@@ -270,6 +289,9 @@ local function reposition()
     applied_title = title
   end
   vim.g.ui_cmdline_pos = { row + content_height + b * 2, col + b + M.config.menu_col_offset } -- blink.cmp / nvim-cmp anchor
+  if moved then
+    vim.api.nvim_exec_autocmds("User", { pattern = "TinyCmdlineMoved" })
+  end
 end
 
 --- Whether cmdline_* functions have been monkey patched.
@@ -378,6 +400,14 @@ function M.setup(opts)
           M.config.on_reposition()
         end
       end)
+    end,
+  })
+
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "TinyCmdlineMoved",
+    callback = function()
+      vim.schedule(fix_pum)
     end,
   })
 
