@@ -175,9 +175,9 @@ vim.api.nvim_set_hl(0, "TinyCmdlineNormal", { bg = "#your_color" })
 
 ## How It Works
 
-tiny-cmdline hooks into Neovim's internal `vim._core.ui2` system, which manages the floating cmdline window introduced in Neovim 0.12. On every `CmdlineEnter` it repositions that window to the center of the editor, and on `CmdlineLeave` it restores the original position so that post-command messages still render correctly at the bottom.
+tiny-cmdline hooks into Neovim's internal `vim._core.ui2` system, which manages the floating cmdline window introduced in Neovim 0.12. It wraps ui2's `cmdline_show` and `cmdline_hide` handlers: on every show it repositions that window to the center of the editor, and once the last cmdline level is hidden it restores ui2's original window state so that post-command messages still render correctly at the bottom. Nested cmdlines (e.g. `<C-r>=`) and cmdline blocks (e.g. `:function`) keep the centered window until they are fully closed.
 
-Cmdline types listed in `native_types` (search by default) are pinned to the bottom at full width, preserving the native search experience.
+Cmdline types listed in `native_types` (search by default) are left to ui2, which renders them at the bottom at full width, preserving the native search experience.
 
 The window position is also updated on `VimResized` and `TabEnter` to stay correctly centered after layout changes.
 

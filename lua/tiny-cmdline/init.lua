@@ -96,11 +96,33 @@ local function geometry(content_height)
   return width, row, col, b
 end
 
-local cmdline_type = nil ---@type string|nil
 local original_ui_cmdline_pos = nil ---@type table|nil
 local cmd_win_saved = nil ---@type table|nil
 local ui2 = nil ---@type table|nil
 local applied_title = nil ---@type string|nil
+
+local WINHIGHLIGHT =
+  "Normal:TinyCmdlineNormal,FloatBorder:TinyCmdlineBorder,FloatTitle:TinyCmdlineTitle"
+
+---@return string
+local function get_styled_winhighlight()
+  -- appended to ui2's value (if any) so its Search/CurSearch/IncSearch hiding stays; later entries win
+  local saved_hl = ""
+  if cmd_win_saved and cmd_win_saved.winhighlight ~= "" then
+    saved_hl = cmd_win_saved.winhighlight .. ","
+  end
+  return saved_hl .. WINHIGHLIGHT
+end
+
+--- Sets winhighlight like ui2 does.
+---
+---@param win integer
+---@param value string
+local function set_winhighlight(win, value)
+  vim._with({ win = win, noautocmd = true }, function()
+    vim.api.nvim_set_option_value("winhighlight", value, { scope = "local" })
+  end)
+end
 
 local function type_matches(filter, t)
   if filter == nil then
@@ -115,12 +137,12 @@ end
 ---@return string|nil
 local function compute_title()
   local cfg = M.config.title
-  if not cfg or not cfg.enabled or not cmdline_type then
+  if not cfg or not cfg.enabled or vim.fn.getcmdtype() == "" then
     return nil
   end
   local cmdline = vim.fn.getcmdline() or ""
   for _, fmt in ipairs(cfg.formats or {}) do
-    if type_matches(fmt.type, cmdline_type) then
+    if type_matches(fmt.type, vim.fn.getcmdtype()) then
       local patterns = fmt.pattern
       if patterns == nil then
         return fmt.title
@@ -156,8 +178,59 @@ local function get_cmd_win()
   return (win and vim.api.nvim_win_is_valid(win)) and win or nil
 end
 
+--- Whether the tiny cmdline should be used.
+---
+---@return boolean
+local function is_styled()
+  local t = vim.fn.getcmdtype()
+  return t ~= "" and not vim.tbl_contains(M.config.native_types, t)
+end
+
+--- Snapshots ui2's own window state once per styled cmdline so restore() can hand it back untouched.
+---@param win integer
+local function save(win)
+  if cmd_win_saved and cmd_win_saved.win == win then
+    return
+  end
+  local current = vim.api.nvim_win_get_config(win)
+  cmd_win_saved = {
+    win = win,
+    cfg = {
+      relative = current.relative,
+      anchor = current.anchor,
+      col = current.col,
+      row = current.row,
+      width = current.width,
+      border = current.border,
+    },
+    winhighlight = vim.wo[win].winhighlight,
+  }
+end
+
+-- Undoes everything reposition() changed, so native types and post-command messages get ui2's window.
+local function restore()
+  applied_title = nil
+  vim.g.ui_cmdline_pos = original_ui_cmdline_pos
+  local saved = cmd_win_saved
+  if not saved then
+    return
+  end
+  -- ui2 may have replaced the window in the meantime; a new one already has ui2's state
+  if get_cmd_win() ~= saved.win then
+    cmd_win_saved = nil
+    return
+  end
+  local cfg_ok = pcall(vim.api.nvim_win_set_config, saved.win, saved.cfg)
+  local hl_ok = pcall(set_winhighlight, saved.win, saved.winhighlight)
+  -- on failure the window is still styled; keep the snapshot so the next save() doesn't record
+  -- that as ui2's state, and the next restore() retries
+  if cfg_ok and hl_ok then
+    cmd_win_saved = nil
+  end
+end
+
 local function reposition()
-  if not cmdline_type then
+  if not is_styled() then
     return
   end
   local win = get_cmd_win()
@@ -165,43 +238,13 @@ local function reposition()
     return
   end
 
+  save(win) -- no-op unless ui2 replaced the window since the last snapshot
+  local winhighlight = get_styled_winhighlight()
+  if vim.wo[win].winhighlight ~= winhighlight then
+    set_winhighlight(win, winhighlight)
+  end
   local current = vim.api.nvim_win_get_config(win)
-
-  -- saved once per session and restored on CmdlineLeave so post-command messages render at the bottom
-  if not cmd_win_saved then
-    cmd_win_saved = {
-      relative = current.relative,
-      anchor = current.anchor,
-      col = current.col,
-      row = current.row,
-      width = current.width,
-      border = current.border,
-    }
-    vim.wo[win].winhighlight = "Normal:TinyCmdlineNormal,FloatBorder:TinyCmdlineBorder,FloatTitle:TinyCmdlineTitle"
-  end
-
   local content_height = math.max(1, vim.api.nvim_win_get_height(win))
-
-  if vim.tbl_contains(M.config.native_types, cmdline_type) then
-    local target_row = math.max(0, vim.o.lines - content_height)
-    if
-      current.relative ~= "editor"
-      or current.row ~= target_row
-      or current.col ~= 0
-      or current.width ~= vim.o.columns
-    then
-      pcall(vim.api.nvim_win_set_config, win, {
-        relative = "editor",
-        row = target_row,
-        col = 0,
-        width = vim.o.columns,
-        border = "none",
-      })
-    end
-    vim.g.ui_cmdline_pos = original_ui_cmdline_pos
-    return
-  end
-
   local width, row, col, b = geometry(content_height)
   local title = compute_title()
   local borderless = M.config.border == "none" or M.config.border == nil
@@ -229,8 +272,49 @@ local function reposition()
   vim.g.ui_cmdline_pos = { row + content_height + b * 2, col + b + M.config.menu_col_offset } -- blink.cmp / nvim-cmp anchor
 end
 
+--- Whether cmdline_* functions have been monkey patched.
+---@type boolean
 local wrapped = false
-local function wrap_cmdline_show()
+local orig_cmdline_hide = function(...) end
+local orig_cmdline_show = function(...) end
+
+--- Shows styled cmdline if requested and manage ui2/tiny state.
+local function tiny_cmdline_show(...)
+  if not is_styled() then
+    -- Before orig_cmdline_show, so ui2 sizes the window at its own width; also covers a native
+    -- cmdline nested in a styled one, which gets no cmdline_hide in between.
+    restore()
+    return orig_cmdline_show(...)
+  end
+
+  -- reposition() snapshots after orig_cmdline_show, so it sees ui2's update to this event (e.g.,
+  -- border).
+  local r = orig_cmdline_show(...)
+  -- search types need cmdheight=1 for stable IncSearch rendering
+  local t = vim.fn.getcmdtype()
+  if t ~= "/" and t ~= "?" then
+    set_cmdheight_0()
+  end
+  reposition()
+  return r
+end
+
+--- Restores ui2 state if needed and runs the ui2 cmdline_hide.
+local function tiny_cmdline_hide(...)
+  local cmdline = require("vim._core.ui2.cmdline")
+  local r = orig_cmdline_hide(...)
+  -- ui2 keeps the window (and its level) for nested cmdlines and blocks; restoring then
+  -- would flash it at the bottom, and the next cmdline_show repositions anyway
+  if cmdline.level == 0 then
+    restore()
+    -- defer so ui2's OptionSet doesn't re-bump cmdheight after leaving search/native types;
+    -- only at level 0, as an outer search may still need cmdheight=1
+    vim.schedule(set_cmdheight_0)
+  end
+  return r
+end
+
+local function wrap_cmdline_fns()
   if wrapped then
     return
   end
@@ -238,26 +322,17 @@ local function wrap_cmdline_show()
   if not ok then
     return
   end
-  local orig = cmdline.cmdline_show
-  cmdline.cmdline_show = function(...)
-    local r = orig(...)
-    if not cmdline_type then
-      return r
-    end
 
-    -- search types need cmdheight=1 for stable IncSearch rendering
-    local is_search = cmdline_type == "/" or cmdline_type == "?"
-    if not is_search and not vim.tbl_contains(M.config.native_types, cmdline_type) then
-      set_cmdheight_0()
-    end
-    reposition()
-    return r
-  end
+  orig_cmdline_show = cmdline.cmdline_show
+  orig_cmdline_hide = cmdline.cmdline_hide
+
+  cmdline.cmdline_show = tiny_cmdline_show
+  cmdline.cmdline_hide = tiny_cmdline_hide
   wrapped = true
 end
 
 local function wrap_and_reposition()
-  wrap_cmdline_show()
+  wrap_cmdline_fns()
   reposition()
 end
 
@@ -286,33 +361,6 @@ function M.setup(opts)
   end
 
   local group = vim.api.nvim_create_augroup("tiny-cmdline", { clear = true })
-
-  vim.api.nvim_create_autocmd("CmdlineEnter", {
-    group = group,
-    callback = function()
-      cmdline_type = vim.fn.getcmdtype()
-    end,
-  })
-
-  vim.api.nvim_create_autocmd("CmdlineLeave", {
-    group = group,
-    callback = function()
-      cmdline_type = nil
-      applied_title = nil
-      vim.g.ui_cmdline_pos = original_ui_cmdline_pos
-
-      local win = get_cmd_win()
-      if win and cmd_win_saved then
-        -- restore original position so post-command messages render at the bottom
-        pcall(vim.api.nvim_win_set_config, win, cmd_win_saved)
-        cmd_win_saved = nil
-      end
-
-      -- defer so ui2's OptionSet doesn't re-bump cmdheight after leaving search/native types
-      vim.schedule(set_cmdheight_0)
-    end,
-  })
-
   vim.api.nvim_create_autocmd("FileType", {
     group = group,
     pattern = "cmd",
