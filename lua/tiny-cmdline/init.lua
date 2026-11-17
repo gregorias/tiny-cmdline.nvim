@@ -312,7 +312,7 @@ local function reposition()
     pcall(vim.api.nvim_win_set_config, win, cfg)
     applied_title = title
   end
-  vim.g.ui_cmdline_pos = { row + content_height + b * 2, col + b + M.config.menu_col_offset } -- blink.cmp / nvim-cmp anchor
+  vim.g.ui_cmdline_pos = { row + content_height + b, col + b + M.config.menu_col_offset } -- blink.cmp / nvim-cmp anchor
   if moved then
     vim.api.nvim_exec_autocmds("User", { pattern = "TinyCmdlineMoved" })
   end
